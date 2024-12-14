@@ -1,17 +1,19 @@
 
 # Postgres CRUD API with Swagger Documentation
 
-This project provides a fully functional CRUD (Create, Read, Update, Delete) API for interacting with a PostgreSQL database. It includes detailed Swagger documentation and implements robust validation, error handling, and pagination.
+This project provides a fully functional CRUD (Create, Read, Update, Delete) API for interacting with a PostgreSQL database. It includes detailed Swagger documentation and implements robust validation, error handling, pagination, and advanced features such as session-based authentication and login attempt logging.
 
 ---
 
 ## **Features**
 - CRUD operations for managing data in a PostgreSQL database.
 - Input validation with `express-validator`.
-- Swagger UI for interactive API documentation.
-- Basic authentication for Swagger access control.
+- Swagger UI for interactive API documentation with custom favicon and title.
+- Basic authentication for Swagger with session management.
+- Login attempt logging, including timestamps, usernames, and passwords.
 - Pagination support for `GET` operations.
 - Secure error handling to prevent sensitive data leaks.
+- Automatic session expiration after inactivity.
 
 ---
 
@@ -122,6 +124,7 @@ npm install
    DB_PORT=5432
    DB_NAME=growth
    PORT=5000
+   SESSION_SECRET=<your_strong_secret_key>
    ```
 
 ### Step 4: Add Authentication
@@ -225,6 +228,7 @@ Use the credentials from `users.json` to log in.
 
 - **Username and Password**: Stored in `users.json`.
 - **Security**: `users.json` is ignored in `.gitignore` to prevent exposure in the repository.
+- **Session Management**: Sessions expire after 10 minutes of inactivity.
 
 ---
 
@@ -232,16 +236,19 @@ Use the credentials from `users.json` to log in.
 
 ```
 backend/
-├── db/
-│   └── pool.js              # Database connection pool
-├── routes/
-│   └── crud.js              # CRUD API routes with Swagger annotations
-├── users.json               # Credentials for Swagger authentication (ignored by Git)
-├── users.sample.json        # Sample structure for users.json
-├── .env                     # Environment variables
-├── .gitignore               # Excludes sensitive files from Git
-├── index.js                 # Main server file
-├── package.json             # Dependencies and scripts
++-- db/
+�   +-- pool.js              # Database connection pool
++-- routes/
+�   +-- crud.js              # CRUD API routes with Swagger annotations
++-- public/
+�   +-- login.html           # Custom login UI
++-- logs/
+�   +-- login_attempts.log   # Contains logs of login attempts
++-- users.json               # Credentials for Swagger authentication (ignored by Git)
++-- .env                     # Environment variables
++-- .gitignore               # Excludes sensitive files from Git
++-- index.js                 # Main server file
++-- package.json             # Dependencies and scripts
 ```
 
 ---
@@ -249,12 +256,12 @@ backend/
 ## **Security Practices**
 
 1. **Secure Environment Variables**:
-   - Use `.env` for storing database credentials.
+   - Use `.env` for storing database credentials and session secrets.
    - Ensure `.env` is in `.gitignore`.
 
 2. **Authentication**:
-   - Protect Swagger UI with basic authentication.
-   - Do not hardcode passwords.
+   - Protect Swagger UI with session-based authentication.
+   - Log all login attempts (success and failure).
 
 3. **Error Handling**:
    - Log internal errors to the server console.
@@ -262,6 +269,9 @@ backend/
 
 4. **Pagination**:
    - Use pagination for `GET` requests to prevent large dataset overloading.
+
+5. **Rate Limiting**:
+   - Protect against DDoS attacks by applying rate limiting to login and API endpoints.
 
 ---
 
