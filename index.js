@@ -25,6 +25,7 @@ const swaggerOptions = {
     },
     apis: ['./routes/crud.js'], // Swagger annotations are in this file
 };
+console.log('Swagger loading files from: ./routes/crud.js');
 
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
