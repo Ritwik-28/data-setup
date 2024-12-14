@@ -1,7 +1,18 @@
 const express = require('express');
 const pool = require('../db/pool');
 const { check, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
+const json2csv = require('json2csv').parse; // For CSV download
+
+/**
+ * Rate limiter for the SQL Playground
+ */
+const sqlPlaygroundLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 50, // Limit each IP to 50 requests per window
+    message: 'Too many requests from this IP, please try again after 15 minutes.',
+});
 
 /**
  * @swagger
@@ -97,27 +108,14 @@ router.post(
  *               properties:
  *                 totalItems:
  *                   type: integer
- *                   description: Total number of items in the database.
  *                 currentPage:
  *                   type: integer
- *                   description: Current page number.
  *                 totalPages:
  *                   type: integer
- *                   description: Total number of pages.
  *                 data:
  *                   type: array
  *                   items:
  *                     type: object
- *                     properties:
- *                       id:
- *                         type: integer
- *                         description: The item ID.
- *                       name:
- *                         type: string
- *                         description: The item name.
- *                       value:
- *                         type: string
- *                         description: The item value.
  */
 router.get('/items', async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -165,56 +163,27 @@ router.get('/items', async (req, res) => {
  *             properties:
  *               name:
  *                 type: string
- *                 example: "Updated Item"
  *               value:
  *                 type: string
- *                 example: "67890"
  *     responses:
  *       200:
  *         description: The updated item.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: integer
- *                   example: 1
- *                 name:
- *                   type: string
- *                   example: "Updated Item"
- *                 value:
- *                   type: string
- *                   example: "67890"
  */
-router.put(
-    '/items/:id',
-    [
-        check('id').isInt().withMessage('ID must be an integer'),
-        check('name').optional().isString().withMessage('Name must be a string'),
-        check('value').optional().isString().withMessage('Value must be a string'),
-    ],
-    async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
+router.put('/items/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, value } = req.body;
 
-        const { id } = req.params;
-        const { name, value } = req.body;
-
-        try {
-            const result = await pool.query(
-                'UPDATE items SET name = $1, value = $2 WHERE id = $3 RETURNING *',
-                [name, value, id]
-            );
-            res.status(200).json(result.rows[0]);
-        } catch (err) {
-            console.error('Error updating item:', err.message);
-            res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
-        }
+    try {
+        const result = await pool.query(
+            'UPDATE items SET name = $1, value = $2 WHERE id = $3 RETURNING *',
+            [name, value, id]
+        );
+        res.status(200).json(result.rows[0]);
+    } catch (err) {
+        console.error('Error updating item:', err.message);
+        res.status(500).json({ error: 'An unexpected error occurred.' });
     }
-);
+});
 
 /**
  * @swagger
@@ -231,27 +200,58 @@ router.put(
  *         description: The ID of the item to delete.
  *     responses:
  *       204:
- *         description: No content (item deleted successfully).
+ *         description: Item deleted successfully.
  */
-router.delete(
-    '/items/:id',
-    [check('id').isInt().withMessage('ID must be an integer')],
-    async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
+router.delete('/items/:id', async (req, res) => {
+    const { id } = req.params;
 
-        const { id } = req.params;
-
-        try {
-            await pool.query('DELETE FROM items WHERE id = $1', [id]);
-            res.status(204).send();
-        } catch (err) {
-            console.error('Error deleting item:', err.message);
-            res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
-        }
+    try {
+        await pool.query('DELETE FROM items WHERE id = $1', [id]);
+        res.status(204).send();
+    } catch (err) {
+        console.error('Error deleting item:', err.message);
+        res.status(500).json({ error: 'An unexpected error occurred.' });
     }
-);
+});
+
+/**
+ * @swagger
+ * /api/sql-playground:
+ *   post:
+ *     summary: Execute custom SQL query
+ *     description: Execute any valid SQL query.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               query:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Query executed successfully.
+ */
+router.post('/sql-playground', sqlPlaygroundLimiter, async (req, res) => {
+    const { query } = req.body;
+
+    try {
+        const result = await pool.query(query);
+
+        // Handle CSV download
+        if (req.query.download === 'csv') {
+            const csv = json2csv(result.rows);
+            res.header('Content-Type', 'text/csv');
+            res.attachment('query_results.csv');
+            return res.send(csv);
+        }
+
+        res.status(200).json({ rows: result.rows });
+    } catch (err) {
+        console.error('SQL Error:', err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
 
 module.exports = router;

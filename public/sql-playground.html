@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Playground</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.4.14/ace.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        h1 {
+            text-align: center;
+            background: #007bff;
+            color: white;
+            padding: 10px;
+        }
+        #editor {
+            height: 300px;
+            width: 100%;
+            border: 1px solid #ccc;
+        }
+        #run-btn {
+            display: block;
+            margin: 10px auto;
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #run-btn:hover {
+            background-color: #0056b3;
+        }
+        #results {
+            margin: 20px auto;
+            width: 90%;
+            max-height: 400px;
+            overflow: auto;
+            border: 1px solid #ddd;
+            background: #f7f7f7;
+            padding: 10px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        #download-btn {
+            display: block;
+            margin: 10px auto;
+            padding: 10px 20px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        #download-btn:hover {
+            background-color: #218838;
+        }
+    </style>
+</head>
+<body>
+    <h1>SQL Playground</h1>
+    <div id="editor">SELECT * FROM items;</div>
+    <button id="run-btn">Run Query</button>
+    <button id="download-btn" style="display: none;">Download CSV</button>
+    <div id="results">Query results will appear here...</div>
+
+    <script>
+        const editor = ace.edit("editor");
+        editor.setTheme("ace/theme/github");
+        editor.session.setMode("ace/mode/sql");
+
+        const runBtn = document.getElementById("run-btn");
+        const downloadBtn = document.getElementById("download-btn");
+        const resultsDiv = document.getElementById("results");
+
+        let queryResults = [];
+
+        runBtn.addEventListener("click", async () => {
+            const query = editor.getValue();
+            resultsDiv.textContent = "Executing query...";
+            downloadBtn.style.display = "none";
+
+            try {
+                const response = await axios.post('/api/sql-playground', { query });
+                queryResults = response.data.rows;
+
+                if (queryResults.length > 0) {
+                    displayResults(queryResults);
+                    downloadBtn.style.display = "inline-block";
+                } else {
+                    resultsDiv.textContent = "No results found.";
+                }
+            } catch (err) {
+                resultsDiv.textContent = `Error: ${err.response ? err.response.data.error : err.message}`;
+            }
+        });
+
+        downloadBtn.addEventListener("click", () => {
+            if (queryResults.length > 0) {
+                const csvContent = queryResults.map(row => Object.values(row).join(",")).join("\n");
+                const blob = new Blob([csvContent], { type: "text/csv" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "query_results.csv";
+                a.click();
+            }
+        });
+
+        function displayResults(rows) {
+            const keys = Object.keys(rows[0]);
+            let tableHTML = "<table><thead><tr>";
+            keys.forEach(key => (tableHTML += `<th>${key}</th>`));
+            tableHTML += "</tr></thead><tbody>";
+            rows.forEach(row => {
+                tableHTML += "<tr>";
+                keys.forEach(key => (tableHTML += `<td>${row[key]}</td>`));
+                tableHTML += "</tr>";
+            });
+            tableHTML += "</tbody></table>";
+            resultsDiv.innerHTML = tableHTML;
+        }
+    </script>
+</body>
+</html>
