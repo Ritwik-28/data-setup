@@ -1,19 +1,18 @@
-
 # Postgres CRUD API with Swagger Documentation
 
-This project provides a fully functional CRUD (Create, Read, Update, Delete) API for interacting with a PostgreSQL database. It includes detailed Swagger documentation and implements robust validation, error handling, pagination, and advanced features such as session-based authentication and login attempt logging.
+This project provides a fully functional CRUD (Create, Read, Update, Delete) API for interacting with a PostgreSQL database. It includes detailed Swagger documentation, session-based authentication, secure password handling, and advanced features such as rate limiting and hashed password storage.
 
 ---
 
 ## **Features**
 - CRUD operations for managing data in a PostgreSQL database.
 - Input validation with `express-validator`.
-- Swagger UI for interactive API documentation with custom favicon and title.
-- Basic authentication for Swagger with session management.
-- Login attempt logging, including timestamps, usernames, and passwords.
-- Pagination support for `GET` operations.
-- Secure error handling to prevent sensitive data leaks.
+- Swagger UI for interactive API documentation with a custom favicon and title.
+- Secure session-based authentication for Swagger and SQL Playground.
+- Passwords stored securely as hashed values using `bcrypt`.
+- Rate limiting for API and login requests to prevent abuse.
 - Automatic session expiration after inactivity.
+- Detailed login attempt logging with timestamps and statuses.
 
 ---
 
@@ -22,11 +21,11 @@ This project provides a fully functional CRUD (Create, Read, Update, Delete) API
 2. [Setting Up PostgreSQL](#setting-up-postgresql)
 3. [Project Setup](#project-setup)
 4. [Running the Application](#running-the-application)
-5. [API Endpoints](#api-endpoints)
-6. [Swagger Documentation](#swagger-documentation)
-7. [Authentication for Swagger](#authentication-for-swagger)
-8. [File Structure](#file-structure)
-9. [Security Practices](#security-practices)
+5. [Adding New Users](#adding-new-users)
+6. [API Endpoints](#api-endpoints)
+7. [Swagger Documentation](#swagger-documentation)
+8. [Security Features](#security-features)
+9. [File Structure](#file-structure)
 10. [Contributing](#contributing)
 
 ---
@@ -128,14 +127,11 @@ npm install
    ```
 
 ### Step 4: Add Authentication
-1. Create a `users.json` file in the project root for Swagger authentication:
-   ```json
-   {
-       "admin": "password123",
-       "user1": "user1password"
-   }
+1. Use the `addUser.js` script to securely add new users to `users.json`:
+   ```bash
+   node addUser.js <username> <password>
    ```
-2. Add `users.json` to `.gitignore`:
+2. Add `users.json` to `.gitignore` to ensure it is not exposed:
    ```plaintext
    users.json
    ```
@@ -149,6 +145,15 @@ npm install
    node index.js
    ```
 2. The server will run on `http://localhost:5000`.
+
+---
+
+## **Adding New Users**
+To add new users with hashed passwords, run the following command:
+```bash
+node addUser.js <username> <password>
+```
+This will securely store the hashed password in `users.json`.
 
 ---
 
@@ -220,15 +225,26 @@ Swagger UI is available at:
 ```
 http://localhost:5000/api-docs
 ```
-Use the credentials from `users.json` to log in.
+Use your login credentials to access it.
 
 ---
 
-## **Authentication for Swagger**
+## **Security Features**
 
-- **Username and Password**: Stored in `users.json`.
-- **Security**: `users.json` is ignored in `.gitignore` to prevent exposure in the repository.
-- **Session Management**: Sessions expire after 10 minutes of inactivity.
+1. **Hashed Passwords**:
+   - Passwords are hashed using `bcrypt` before being stored in `users.json`.
+
+2. **Session Management**:
+   - Sessions expire after 10 minutes of inactivity.
+
+3. **Rate Limiting**:
+   - Limits API and login requests to 100 per 15 minutes per IP to prevent abuse.
+
+4. **Error Handling**:
+   - Logs errors to the server and displays generic messages to clients to prevent sensitive data leaks.
+
+5. **Environment Variables**:
+   - Credentials and secrets are stored securely in `.env`.
 
 ---
 
@@ -249,29 +265,8 @@ backend/
 +-- .gitignore               # Excludes sensitive files from Git
 +-- index.js                 # Main server file
 +-- package.json             # Dependencies and scripts
++-- addUser.js               # Script to securely add new users
 ```
-
----
-
-## **Security Practices**
-
-1. **Secure Environment Variables**:
-   - Use `.env` for storing database credentials and session secrets.
-   - Ensure `.env` is in `.gitignore`.
-
-2. **Authentication**:
-   - Protect Swagger UI with session-based authentication.
-   - Log all login attempts (success and failure).
-
-3. **Error Handling**:
-   - Log internal errors to the server console.
-   - Send generic error messages to the client.
-
-4. **Pagination**:
-   - Use pagination for `GET` requests to prevent large dataset overloading.
-
-5. **Rate Limiting**:
-   - Protect against DDoS attacks by applying rate limiting to login and API endpoints.
 
 ---
 

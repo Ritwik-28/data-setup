@@ -6,6 +6,8 @@ const crudRoutes = require('./routes/crud');
 const session = require('express-session');
 const fs = require('fs');
 const path = require('path');
+const rateLimit = require('express-rate-limit');
+const bcrypt = require('bcrypt'); // For secure password hashing
 require('dotenv').config(); // Load environment variables from .env
 
 const app = express();
@@ -25,8 +27,8 @@ if (!fs.existsSync(logsDir)) {
 const logFilePath = path.join(logsDir, 'login_attempts.log');
 
 // Log login attempts
-const logLoginAttempt = (username, password, status) => {
-    const logEntry = `${new Date().toISOString()} - Username: ${username}, Password: ${password}, Status: ${status}\n`;
+const logLoginAttempt = (username, status) => {
+    const logEntry = `${new Date().toISOString()} - Username: ${username}, Status: ${status}\n`;
     fs.appendFileSync(logFilePath, logEntry, 'utf8');
 };
 
@@ -35,8 +37,13 @@ const usersFilePath = './users.json';
 let users = {};
 
 if (fs.existsSync(usersFilePath)) {
-    users = JSON.parse(fs.readFileSync(usersFilePath));
-    console.log('Users loaded from users.json (securely in backend)');
+    try {
+        users = JSON.parse(fs.readFileSync(usersFilePath, 'utf8'));
+        console.log('Users loaded securely from users.json');
+    } catch (err) {
+        console.error('Error reading users.json:', err);
+        users = {};
+    }
 } else {
     console.error('Error: users.json file not found. Ensure this file exists locally.');
 }
@@ -76,6 +83,18 @@ const requireLogin = (req, res, next) => {
     }
 };
 
+// Rate limiter middleware
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per window
+    message: {
+        error: 'Too many requests from this IP, please try again after 15 minutes.',
+    },
+});
+
+// Apply rate limiting globally
+app.use(apiLimiter);
+
 // Serve the login page
 app.get('/login', (req, res) => {
     const error = req.query.error || ''; // Retrieve error message if any
@@ -83,20 +102,20 @@ app.get('/login', (req, res) => {
 });
 
 // Handle login requests
-app.post('/login', (req, res) => {
+app.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
     // Check credentials
-    if (users[username] && users[username] === password) {
+    if (users[username] && (await bcrypt.compare(password, users[username]))) {
         req.session.user = username;
-        logLoginAttempt(username, password, 'Success');
+        logLoginAttempt(username, 'Success');
 
         // Redirect to the originally intended URL or default to /sql-playground
         const redirectTo = req.session.redirectTo || '/sql-playground';
         delete req.session.redirectTo; // Clear the redirectTo session variable
         res.redirect(redirectTo);
     } else {
-        logLoginAttempt(username || 'Unknown', password || 'Unknown', 'Failure');
+        logLoginAttempt(username || 'Unknown', 'Failure');
         res.redirect('/login?error=Invalid%20credentials'); // Pass error message
     }
 });
