@@ -1,106 +1,81 @@
 const express = require('express');
 const pool = require('../db/pool');
-const { check, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
-const json2csv = require('json2csv').parse; // For CSV download
 
 /**
- * Rate limiter for the SQL Playground
+ * Rate limiter for the API
  */
-const sqlPlaygroundLimiter = rateLimit({
+const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 50, // Limit each IP to 50 requests per window
     message: 'Too many requests from this IP, please try again after 15 minutes.',
 });
 
 /**
- * @swagger
- * /api/items:
- *   post:
- *     summary: Create a new item
- *     description: Add a new item to the database.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *                 description: The name of the item.
- *                 example: "Example Item"
- *               value:
- *                 type: string
- *                 description: The value of the item.
- *                 example: "12345"
- *     responses:
- *       201:
- *         description: The created item.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: integer
- *                   example: 1
- *                 name:
- *                   type: string
- *                   example: "Example Item"
- *                 value:
- *                   type: string
- *                   example: "12345"
+ * Middleware: Validate table name
  */
-router.post(
-    '/items',
-    [
-        check('name').isString().notEmpty().withMessage('Name is required and must be a string'),
-        check('value').isString().notEmpty().withMessage('Value is required and must be a string'),
-    ],
-    async (req, res) => {
-        const errors = validationResult(req);
-        if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
-        }
+const validateTableName = async (req, res, next) => {
+    const { table } = req.params;
 
-        const { name, value } = req.body;
-        try {
-            const result = await pool.query(
-                'INSERT INTO items (name, value) VALUES ($1, $2) RETURNING *',
-                [name, value]
-            );
-            res.status(201).json(result.rows[0]);
-        } catch (err) {
-            console.error('Error creating item:', err.message);
-            res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+    try {
+        const validTables = await pool.query(`
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public';
+        `);
+        const tableNames = validTables.rows.map(row => row.table_name);
+
+        if (!tableNames.includes(table)) {
+            return res.status(400).json({ error: `Invalid table name: ${table}` });
         }
+        next();
+    } catch (err) {
+        console.error('Error validating table name:', err.message);
+        res.status(500).json({ error: 'Internal server error while validating table name.' });
     }
-);
+};
 
 /**
+ * Swagger Tags
+ */
+/**
  * @swagger
- * /api/items:
+ * tags:
+ *   - name: Dynamic Table API
+ *     description: APIs for dynamically interacting with database tables
+ */
+
+/**
+ * Dynamic Route: Retrieve all rows from a table with optional pagination.
+ * @swagger
+ * /api/{table}:
  *   get:
- *     summary: Retrieve all items with pagination
- *     description: Get a list of all items from the database with pagination support.
+ *     summary: Retrieve all rows from a table with pagination.
+ *     tags:
+ *       - Dynamic Table API
  *     parameters:
+ *       - in: path
+ *         name: table
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Name of the table to query.
  *       - in: query
  *         name: page
  *         schema:
  *           type: integer
  *           default: 1
- *         description: The page number (default is 1).
+ *         description: Page number for pagination.
  *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
  *           default: 10
- *         description: The number of items per page (default is 10).
+ *         description: Number of rows per page.
  *     responses:
  *       200:
- *         description: A list of items with pagination.
+ *         description: Successful response with rows and pagination details.
  *         content:
  *           application/json:
  *             schema:
@@ -116,17 +91,23 @@ router.post(
  *                   type: array
  *                   items:
  *                     type: object
+ *                     additionalProperties: true
+ *       400:
+ *         description: Invalid table name.
+ *       500:
+ *         description: Internal server error.
  */
-router.get('/items', async (req, res) => {
+router.get('/:table', apiLimiter, validateTableName, async (req, res) => {
+    const { table } = req.params;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
     try {
-        const totalResult = await pool.query('SELECT COUNT(*) FROM items');
+        const totalResult = await pool.query(`SELECT COUNT(*) FROM ${table}`);
         const totalItems = parseInt(totalResult.rows[0].count);
 
-        const result = await pool.query('SELECT * FROM items LIMIT $1 OFFSET $2', [limit, offset]);
+        const result = await pool.query(`SELECT * FROM ${table} LIMIT $1 OFFSET $2`, [limit, offset]);
         const totalPages = Math.ceil(totalItems / limit);
 
         res.status(200).json({
@@ -136,90 +117,175 @@ router.get('/items', async (req, res) => {
             data: result.rows,
         });
     } catch (err) {
-        console.error('Error retrieving items:', err.message);
-        res.status(500).json({ error: 'An unexpected error occurred. Please try again.' });
+        console.error(`Error fetching data from table ${table}:`, err.message);
+        res.status(500).json({ error: `Error fetching data from table ${table}: ${err.message}` });
     }
 });
 
 /**
+ * Dynamic Route: Insert a new row into a table.
  * @swagger
- * /api/items/{id}:
- *   put:
- *     summary: Update an item
- *     description: Update the details of an existing item.
+ * /api/{table}:
+ *   post:
+ *     summary: Insert a new row into a table.
+ *     tags:
+ *       - Dynamic Table API
  *     parameters:
  *       - in: path
- *         name: id
- *         schema:
- *           type: integer
+ *         name: table
  *         required: true
- *         description: The ID of the item to update.
+ *         schema:
+ *           type: string
+ *         description: Name of the table to insert data into.
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             properties:
- *               name:
- *                 type: string
- *               value:
- *                 type: string
+ *             additionalProperties: true
  *     responses:
- *       200:
- *         description: The updated item.
+ *       201:
+ *         description: Row inserted successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               additionalProperties: true
+ *       400:
+ *         description: Invalid request payload.
+ *       500:
+ *         description: Internal server error.
  */
-router.put('/items/:id', async (req, res) => {
-    const { id } = req.params;
-    const { name, value } = req.body;
+router.post('/:table', apiLimiter, validateTableName, async (req, res) => {
+    const { table } = req.params;
+    const data = req.body;
 
     try {
+        const columns = Object.keys(data).join(', ');
+        const values = Object.values(data);
+        const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+
         const result = await pool.query(
-            'UPDATE items SET name = $1, value = $2 WHERE id = $3 RETURNING *',
-            [name, value, id]
+            `INSERT INTO ${table} (${columns}) VALUES (${placeholders}) RETURNING *`,
+            values
         );
+
+        res.status(201).json(result.rows[0]);
+    } catch (err) {
+        console.error(`Error inserting data into table ${table}:`, err.message);
+        res.status(500).json({ error: `Error inserting data into table ${table}: ${err.message}` });
+    }
+});
+
+/**
+ * Dynamic Route: Update a row in a table by ID.
+ * @swagger
+ * /api/{table}/{id}:
+ *   put:
+ *     summary: Update a row in a table by ID.
+ *     tags:
+ *       - Dynamic Table API
+ *     parameters:
+ *       - in: path
+ *         name: table
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Name of the table to update data in.
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID of the row to update.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             additionalProperties: true
+ *     responses:
+ *       200:
+ *         description: Row updated successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               additionalProperties: true
+ *       500:
+ *         description: Internal server error.
+ */
+router.put('/:table/:id', apiLimiter, validateTableName, async (req, res) => {
+    const { table, id } = req.params;
+    const data = req.body;
+
+    try {
+        const updates = Object.keys(data)
+            .map((key, i) => `${key} = $${i + 1}`)
+            .join(', ');
+        const values = Object.values(data);
+
+        const result = await pool.query(
+            `UPDATE ${table} SET ${updates} WHERE id = $${values.length + 1} RETURNING *`,
+            [...values, id]
+        );
+
         res.status(200).json(result.rows[0]);
     } catch (err) {
-        console.error('Error updating item:', err.message);
-        res.status(500).json({ error: 'An unexpected error occurred.' });
+        console.error(`Error updating data in table ${table}:`, err.message);
+        res.status(500).json({ error: `Error updating data in table ${table}: ${err.message}` });
     }
 });
 
 /**
+ * Dynamic Route: Delete a row from a table by ID.
  * @swagger
- * /api/items/{id}:
+ * /api/{table}/{id}:
  *   delete:
- *     summary: Delete an item
- *     description: Remove an item from the database.
+ *     summary: Delete a row from a table by ID.
+ *     tags:
+ *       - Dynamic Table API
  *     parameters:
  *       - in: path
- *         name: id
- *         schema:
- *           type: integer
+ *         name: table
  *         required: true
- *         description: The ID of the item to delete.
+ *         schema:
+ *           type: string
+ *         description: Name of the table to delete data from.
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: ID of the row to delete.
  *     responses:
  *       204:
- *         description: Item deleted successfully.
+ *         description: Row deleted successfully.
+ *       500:
+ *         description: Internal server error.
  */
-router.delete('/items/:id', async (req, res) => {
-    const { id } = req.params;
+router.delete('/:table/:id', apiLimiter, validateTableName, async (req, res) => {
+    const { table, id } = req.params;
 
     try {
-        await pool.query('DELETE FROM items WHERE id = $1', [id]);
+        await pool.query(`DELETE FROM ${table} WHERE id = $1`, [id]);
         res.status(204).send();
     } catch (err) {
-        console.error('Error deleting item:', err.message);
-        res.status(500).json({ error: 'An unexpected error occurred.' });
+        console.error(`Error deleting data from table ${table}:`, err.message);
+        res.status(500).json({ error: `Error deleting data from table ${table}: ${err.message}` });
     }
 });
 
 /**
+ * Create a new table dynamically.
  * @swagger
- * /api/sql-playground:
+ * /api/create-table:
  *   post:
- *     summary: Execute custom SQL query
- *     description: Execute any valid SQL query.
+ *     summary: Create a new table dynamically.
+ *     tags:
+ *       - Dynamic Table API
  *     requestBody:
  *       required: true
  *       content:
@@ -227,30 +293,41 @@ router.delete('/items/:id', async (req, res) => {
  *           schema:
  *             type: object
  *             properties:
- *               query:
+ *               tableName:
  *                 type: string
+ *               columns:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                     type:
+ *                       type: string
+ *                     constraints:
+ *                       type: string
  *     responses:
- *       200:
- *         description: Query executed successfully.
+ *       201:
+ *         description: Table created successfully.
+ *       500:
+ *         description: Internal server error.
  */
-router.post('/sql-playground', sqlPlaygroundLimiter, async (req, res) => {
-    const { query } = req.body;
+router.post('/create-table', apiLimiter, async (req, res) => {
+    const { tableName, columns } = req.body;
+
+    if (!tableName || !Array.isArray(columns)) {
+        return res.status(400).json({ error: 'Invalid table structure. Ensure tableName and columns are provided.' });
+    }
 
     try {
-        const result = await pool.query(query);
-
-        // Handle CSV download
-        if (req.query.download === 'csv') {
-            const csv = json2csv(result.rows);
-            res.header('Content-Type', 'text/csv');
-            res.attachment('query_results.csv');
-            return res.send(csv);
-        }
-
-        res.status(200).json({ rows: result.rows });
+        const columnsDefinition = columns
+            .map(col => `${col.name} ${col.type} ${col.constraints || ''}`)
+            .join(', ');
+        await pool.query(`CREATE TABLE ${tableName} (${columnsDefinition})`);
+        res.status(201).json({ message: `Table ${tableName} created successfully.` });
     } catch (err) {
-        console.error('SQL Error:', err.message);
-        res.status(400).json({ error: err.message });
+        console.error('Error creating table:', err.message);
+        res.status(500).json({ error: `Error creating table: ${err.message}` });
     }
 });
 

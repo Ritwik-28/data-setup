@@ -2,12 +2,13 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const swaggerJsDoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
-const crudRoutes = require('./routes/crud');
 const session = require('express-session');
 const fs = require('fs');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const bcrypt = require('bcrypt'); // For secure password hashing
+const pool = require('./db/pool'); // Database connection pool
+const crudRoutes = require('./routes/crud'); // Import dynamic CRUD routes
 require('dotenv').config(); // Load environment variables from .env
 
 const app = express();
@@ -71,15 +72,20 @@ app.use(
 
 // Middleware to protect routes and enforce session validity
 const requireLogin = (req, res, next) => {
-    if (req.session.user) {
-        // Reset session expiration on activity
-        req.session._garbage = Date();
-        req.session.touch();
-        next();
-    } else {
-        // Save the intended URL and redirect to login
-        req.session.redirectTo = req.originalUrl;
-        res.redirect('/login');
+    try {
+        if (req.session.user) {
+            // Reset session expiration on activity
+            req.session._garbage = Date();
+            req.session.touch();
+            next();
+        } else {
+            // Save the intended URL and redirect to login
+            req.session.redirectTo = req.originalUrl;
+            res.redirect('/login');
+        }
+    } catch (err) {
+        console.error('Error in requireLogin middleware:', err.message);
+        res.status(500).send('Internal server error');
     }
 };
 
@@ -105,20 +111,85 @@ app.get('/login', (req, res) => {
 app.post('/login', async (req, res) => {
     const { username, password } = req.body;
 
-    // Check credentials
-    if (users[username] && (await bcrypt.compare(password, users[username]))) {
-        req.session.user = username;
-        logLoginAttempt(username, 'Success');
+    try {
+        // Check credentials
+        if (users[username] && (await bcrypt.compare(password, users[username]))) {
+            req.session.user = username;
+            logLoginAttempt(username, 'Success');
 
-        // Redirect to the originally intended URL or default to /sql-playground
-        const redirectTo = req.session.redirectTo || '/sql-playground';
-        delete req.session.redirectTo; // Clear the redirectTo session variable
-        res.redirect(redirectTo);
-    } else {
-        logLoginAttempt(username || 'Unknown', 'Failure');
-        res.redirect('/login?error=Invalid%20credentials'); // Pass error message
+            // Redirect to the originally intended URL or default to /sql-playground
+            const redirectTo = req.session.redirectTo || '/sql-playground';
+            delete req.session.redirectTo; // Clear the redirectTo session variable
+            res.redirect(redirectTo);
+        } else {
+            logLoginAttempt(username || 'Unknown', 'Failure');
+            res.redirect('/login?error=Invalid%20credentials'); // Pass error message
+        }
+    } catch (err) {
+        console.error('Error handling login:', err.message);
+        res.status(500).send('Internal server error during login.');
     }
 });
+
+// Fetch all available tables dynamically
+app.get('/api/tables', requireLogin, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public';
+        `);
+        const tables = result.rows.map(row => row.table_name);
+        res.status(200).json({ tables });
+    } catch (err) {
+        console.error('Error fetching tables:', err.message);
+        res.status(500).json({ error: 'Failed to fetch tables' });
+    }
+});
+
+// Create a new table dynamically
+app.post('/api/tables', requireLogin, async (req, res) => {
+    const { tableName, columns } = req.body;
+
+    if (!tableName || !columns || !Array.isArray(columns)) {
+        return res.status(400).json({ error: 'Invalid request payload' });
+    }
+
+    const columnDefinitions = columns
+        .map(col => `${col.name} ${col.type} ${col.required ? 'NOT NULL' : ''}`)
+        .join(', ');
+
+    const createTableQuery = `
+        CREATE TABLE ${tableName} (
+            id SERIAL PRIMARY KEY,
+            ${columnDefinitions}
+        );
+    `;
+
+    try {
+        await pool.query(createTableQuery);
+        res.status(201).json({ message: `Table "${tableName}" created successfully.` });
+    } catch (err) {
+        console.error('Error creating table:', err.message);
+        res.status(500).json({ error: 'Failed to create table' });
+    }
+});
+
+// Route SQL Playground queries dynamically
+app.post('/api/sql-playground', requireLogin, async (req, res) => {
+    const { query } = req.body;
+
+    try {
+        const result = await pool.query(query);
+        res.status(200).json({ rows: result.rows });
+    } catch (err) {
+        console.error('Error executing query:', err.message);
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Integrate dynamic CRUD routes
+app.use('/api', requireLogin, crudRoutes);
 
 // Swagger Documentation
 const swaggerOptions = {
@@ -127,7 +198,7 @@ const swaggerOptions = {
         info: {
             title: 'Growth DB CRUD API',
             version: '1.0.0',
-            description: 'API for managing CRUD operations in Growth DB',
+            description: 'API for managing CRUD operations dynamically for Growth DB',
         },
     },
     apis: ['./routes/crud.js'], // Swagger annotations are defined in this file
@@ -137,14 +208,14 @@ console.log('Swagger loading files from: ./routes/crud.js');
 // Generate Swagger documentation
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
 
-// Serve Swagger UI with Custom Title and Favicon (No SQL Playground Button)
+// Serve Swagger UI with Custom Title and Favicon
 app.use(
     '/api-docs',
     requireLogin, // Ensure the user is logged in to access Swagger UI
     swaggerUi.serve,
     swaggerUi.setup(swaggerDocs, {
-        customSiteTitle: "Crio.Do | Growth DB", // Custom browser tab title
-        customfavIcon: "https://www.crio.do/favicon-32x32.png?v=9e7df616765f0413e5015879d4cc5dc9", // Custom favicon
+        customSiteTitle: 'Crio.Do | Growth DB', // Custom browser tab title
+        customfavIcon: 'https://www.crio.do/favicon-32x32.png?v=9e7df616765f0413e5015879d4cc5dc9', // Custom favicon
         customCss: `
             .swagger-ui .topbar { background: #007bff; }
             .swagger-ui .topbar-wrapper a { color: white; }
@@ -167,15 +238,11 @@ app.get('/logout', (req, res) => {
     });
 });
 
-// Routes
-app.use('/api', crudRoutes);
-
-// 404 Handler
+// Error Handlers
 app.use((req, res, next) => {
     res.status(404).send('Not Found');
 });
 
-// Error Handler
 app.use((err, req, res, next) => {
     console.error(err.stack);
     res.status(500).send('Something broke!');

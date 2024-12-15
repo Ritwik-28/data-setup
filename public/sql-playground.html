@@ -41,10 +41,18 @@
 
     <!-- Main Content -->
     <main class="max-w-6xl mx-auto px-6 py-8">
+        <!-- Table Selector -->
+        <div class="flex items-center space-x-4 mb-4">
+            <label for="table-select" class="font-semibold">Select Table:</label>
+            <select id="table-select" class="border rounded-lg px-3 py-2" disabled>
+                <option value="" disabled selected>Loading tables...</option>
+            </select>
+        </div>
+
         <!-- SQL Editor -->
-        <div id="editor" class="border rounded-lg shadow-md h-64 bg-white">SELECT * FROM items;</div>
+        <div id="editor" class="border rounded-lg shadow-md h-64 bg-white">SELECT * FROM [TABLE_NAME];</div>
         <div class="flex space-x-4 mt-4">
-            <button id="run-btn" class="bg-teal-500 text-white px-4 py-2 rounded-lg hover:bg-teal-700">Run Query</button>
+            <button id="run-btn" class="bg-teal-500 text-white px-4 py-2 rounded-lg hover:bg-teal-700" disabled>Run Query</button>
             <button id="download-btn" class="bg-[#FFD500] text-black px-4 py-2 rounded-lg hover:bg-[#e6c200] hidden">Download CSV</button>
         </div>
         <div id="results" class="mt-6 border rounded-lg shadow-md bg-white p-4 overflow-auto max-h-96">
@@ -60,9 +68,35 @@
         const runBtn = document.getElementById("run-btn");
         const downloadBtn = document.getElementById("download-btn");
         const resultsDiv = document.getElementById("results");
+        const tableSelect = document.getElementById("table-select");
 
         let queryResults = [];
 
+        // Fetch available tables dynamically
+        async function fetchTables() {
+            try {
+                const response = await axios.get('/api/tables');
+                const tables = response.data.tables;
+
+                tableSelect.innerHTML = `<option value="" disabled selected>Select Table</option>` +
+                    tables.map(table => `<option value="${table}">${table}</option>`).join('');
+                tableSelect.disabled = false;
+            } catch (error) {
+                console.error('Error fetching tables:', error);
+                tableSelect.innerHTML = `<option value="" disabled>Error loading tables</option>`;
+            }
+        }
+
+        // Update the SQL editor based on table selection
+        tableSelect.addEventListener('change', () => {
+            const selectedTable = tableSelect.value;
+            editor.setValue(`SELECT * FROM ${selectedTable};`);
+            resultsDiv.textContent = "Query results will appear here...";
+            runBtn.disabled = false;
+            downloadBtn.classList.add("hidden");
+        });
+
+        // Run query and fetch limited results (200 rows for display)
         runBtn.addEventListener("click", async () => {
             const query = editor.getValue();
             resultsDiv.textContent = "Executing query...";
@@ -83,23 +117,36 @@
             }
         });
 
-        downloadBtn.addEventListener("click", () => {
-            if (queryResults.length > 0) {
-                const keys = Object.keys(queryResults[0]);
+        // Download the full query results
+        downloadBtn.addEventListener("click", async () => {
+            const query = editor.getValue();
+
+            try {
+                const response = await axios.post('/api/sql-playground?download=true', { query });
+
+                const keys = Object.keys(response.data.rows[0]);
                 const csvContent = [
                     keys.join(","), // Add headers as the first row
-                    ...queryResults.map(row => keys.map(key => row[key]).join(","))
+                    ...response.data.rows.map(row => keys.map(key => row[key]).join(","))
                 ].join("\n");
+
                 const blob = new Blob([csvContent], { type: "text/csv" });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement("a");
                 a.href = url;
                 a.download = "query_results.csv";
                 a.click();
+            } catch (err) {
+                console.error("Error downloading data:", err.message);
             }
         });
 
         function displayResults(rows) {
+            if (rows.length === 0) {
+                resultsDiv.textContent = "No results found.";
+                return;
+            }
+
             const keys = Object.keys(rows[0]);
             let tableHTML = `<table class="table-auto w-full border-collapse border border-gray-200">
                 <thead><tr class="bg-yellow-300 text-black">`;
@@ -113,6 +160,9 @@
             tableHTML += "</tbody></table>";
             resultsDiv.innerHTML = tableHTML;
         }
+
+        // Fetch tables on page load
+        fetchTables();
 
         const hamburgerMenu = document.getElementById("hamburger-menu");
         const modal = document.getElementById("modal");
