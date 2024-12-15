@@ -70,7 +70,9 @@ const requireLogin = (req, res, next) => {
         req.session.touch();
         next();
     } else {
-        res.redirect('/login'); // Redirect to custom login page
+        // Save the intended URL and redirect to login
+        req.session.redirectTo = req.originalUrl;
+        res.redirect('/login');
     }
 };
 
@@ -88,7 +90,11 @@ app.post('/login', (req, res) => {
     if (users[username] && users[username] === password) {
         req.session.user = username;
         logLoginAttempt(username, password, 'Success');
-        res.redirect('/api-docs');
+
+        // Redirect to the originally intended URL or default to /sql-playground
+        const redirectTo = req.session.redirectTo || '/sql-playground';
+        delete req.session.redirectTo; // Clear the redirectTo session variable
+        res.redirect(redirectTo);
     } else {
         logLoginAttempt(username || 'Unknown', password || 'Unknown', 'Failure');
         res.redirect('/login?error=Invalid%20credentials'); // Pass error message
@@ -112,68 +118,19 @@ console.log('Swagger loading files from: ./routes/crud.js');
 // Generate Swagger documentation
 const swaggerDocs = swaggerJsDoc(swaggerOptions);
 
-// Serve Swagger UI with Custom Title, Favicon, and SQL Playground Button
+// Serve Swagger UI with Custom Title and Favicon (No SQL Playground Button)
 app.use(
     '/api-docs',
     requireLogin, // Ensure the user is logged in to access Swagger UI
     swaggerUi.serve,
-    (req, res, next) => {
-        const swaggerSetupOptions = {
-            customSiteTitle: "Crio.Do | Growth DB", // Custom browser tab title
-            customfavIcon: "https://www.crio.do/favicon-32x32.png?v=9e7df616765f0413e5015879d4cc5dc9", // Custom favicon
-            customCss: `
-                .swagger-ui .topbar { background: #007bff; }
-                .swagger-ui .topbar-wrapper a { color: white; }
-                .sql-playground-container {
-                    text-align: center;
-                    margin-top: 20px;
-                }
-                .btn-sql-playground {
-                    background-color: #007bff;
-                    color: white;
-                    padding: 10px 20px;
-                    border: none;
-                    cursor: pointer;
-                    border-radius: 5px;
-                }
-            `,
-            customJs: `
-                window.onload = function() {
-                    // Create SQL Playground button container
-                    const containerDiv = document.createElement('div');
-                    containerDiv.className = 'sql-playground-container';
-                    
-                    // Create SQL Playground button
-                    const linkButton = document.createElement('button');
-                    linkButton.className = 'btn-sql-playground';
-                    linkButton.innerText = 'Go to SQL Playground';
-                    linkButton.onclick = function() {
-                        window.location.href = '/sql-playground';
-                    };
-                    
-                    // Append button to container
-                    containerDiv.appendChild(linkButton);
-                    
-                    // Try to find the Swagger UI root and append the button
-                    const attempts = [
-                        () => document.querySelector('.swagger-ui'),
-                        () => document.getElementById('swagger-ui'),
-                        () => document.body
-                    ];
-                    
-                    for (let attempt of attempts) {
-                        const root = attempt();
-                        if (root) {
-                            root.appendChild(containerDiv);
-                            break;
-                        }
-                    }
-                };
-            `
-        };
-
-        swaggerUi.setup(swaggerDocs, swaggerSetupOptions)(req, res, next);
-    }
+    swaggerUi.setup(swaggerDocs, {
+        customSiteTitle: "Crio.Do | Growth DB", // Custom browser tab title
+        customfavIcon: "https://www.crio.do/favicon-32x32.png?v=9e7df616765f0413e5015879d4cc5dc9", // Custom favicon
+        customCss: `
+            .swagger-ui .topbar { background: #007bff; }
+            .swagger-ui .topbar-wrapper a { color: white; }
+        `,
+    })
 );
 
 // Serve SQL Playground
